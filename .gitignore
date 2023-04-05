@@ -1,0 +1,6 @@
+.env
+.env.production
+.history
+__pycache__
+database/
+.history/
