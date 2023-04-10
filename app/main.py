@@ -2,65 +2,57 @@ from fastapi import FastAPI, File, UploadFile
 import pytesseract
 import cv2
 import numpy as np
-
+from requests.structures import CaseInsensitiveDict
+from gyazo.api import Api
+from gyazo.error import GyazoError
+from gyazo.image import Image, ImageList
+from time import sleep
+# os
+import os
 app = FastAPI()
+client = Api(access_token=os.environ['GYAZO_ACCESS_TOKEN'])
 
 @app.post("/upload/")
-async def upload_image(image: UploadFile = File(...)):
-    img_array = np.frombuffer(await image.read(), dtype=np.uint8)
-    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+async def upload(file: UploadFile = File(...)):
+    # HEICをJPGに変換
 
-    # グレースケール変換 有効、精度多少向上
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    image = await file.read()
+    # グレースケール変換
+    image = cv2.imdecode(np.frombuffer(image, np.uint8), 0)
+    # # サイズを500kbに圧縮
+    image = compress_image_to_500kb(image)
+    # # ファイルの形式を戻す
+    image = cv2.imencode(".jpg", image)[1].tobytes()
+    
 
-    # 傾きの補正 ダメだった
-    # img = deskew_image(img)
+    # imgをgyazoにアップロード
+    img = client.upload_image(image)
+    sleep(8)
+    test = client.get_image(image_id=img.image_id)
+    # test.ocrがない場合はリトライ
+    while test.ocr is None:
+        sleep(4)
+        test = client.get_image(image_id=img.image_id)
 
-    # 画像のリサイズ あんまり効果ない？ほぼ変化なし
-    # scale_factor = 2.0
-    # new_width = int(img.shape[1] * scale_factor)
-    # new_height = int(img.shape[0] * scale_factor)
-    # img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+    # imgのocrを取得
+    print(test.ocr)
 
-    # ノイズ除去 ダメだった
-    # img = cv2.medianBlur(img, 5)
+    # ocrを改行して整形
+    ocr = test.ocr["description"].splitlines()
 
-    # 二値化 (Adaptive Thresholding) ダメだった
-    # img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 12, 3)
+    return {"img_id": test.image_id, "ocr": ocr} 
 
-    # 二値化 (Otsu's Binarization) ダメだった
-    # _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    # psm 6が一番良さそう、1～12まである
-    text = pytesseract.image_to_string(img, lang='jpn', config='--psm 6 --oem 3')
-    text_lines = text.split('\n')
+def compress_image_to_500kb(image: np.ndarray) -> np.ndarray:
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+    result, enc_img = cv2.imencode('.jpg', image, encode_param)
 
-    return {"text": text_lines}
+    # Check if the compressed image size is less than or equal to 500KB
+    while enc_img.nbytes > 500 * 1024:
+        encode_param[1] -= 5  # Reduce the quality by 5
+        result, enc_img = cv2.imencode('.jpg', image, encode_param)
 
-def deskew_image(img):
-    """
-    !!没、あんまり効果なし
-    画像の傾きを補正する
-    """
-    # Cannyエッジ検出を使用してエッジを検出
-    edges = cv2.Canny(img, 50, 150, apertureSize=3)
-
-    # Hough変換を使用して直線を検出
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
-
-    # 直線の角度を計算
-    angles = []
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
-        angles.append(angle)
-
-    # 角度の中央値を計算して画像の回転角度を決定
-    median_angle = np.median(angles)
-    img_center = tuple(np.array(img.shape[1::-1]) / 2)
-    rotation_matrix = cv2.getRotationMatrix2D(img_center, median_angle, 1.0)
-
-    # 画像を回転させて傾きを補正
-    img_rotated = cv2.warpAffine(img, rotation_matrix, img.shape[1::-1], flags=cv2.INTER_LINEAR)
-
-    return img_rotated
+    # Decode the compressed image back to a numpy array
+    compressed_image = cv2.imdecode(enc_img, cv2.IMREAD_UNCHANGED)
+    
+    return compressed_image

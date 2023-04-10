@@ -12,6 +12,9 @@ uvicorn = {extras = ["standard"], version = "^0.20.0"}
 pytesseract = "^0.3.10"
 opencv-python-headless = "^4.7.0.72"
 python-multipart = "^0.0.6"
+python-gyazo = "^2.3.0"
+setuptools = "^67.6.1"
+pip = "^23.0.1"
 
 [tool.poetry.dev-dependencies]
 
